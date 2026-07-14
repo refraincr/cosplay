@@ -25,9 +25,7 @@ public class CosController {
         DioBO dioBO = new DioBO();
         dioBO.setMsg(msg);
         dioBO.setSessionId(sessionId);
-        CompletableFuture.runAsync(() -> {
-            dioService.talk(dioBO,emitter);
-        });
+        CompletableFuture.runAsync(() -> dioService.talk(dioBO,emitter));
 
         return emitter;
     }

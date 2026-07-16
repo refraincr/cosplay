@@ -52,7 +52,7 @@ public class DioServiceImpl implements RoleService {
         List<ChatMessage> history =
                 chatMemory.getHistory(dioBO.getSessionId());
         int start = Math.max(0,history.size()-20);
-//        List<ChatMessage> recent = history.subList(start, history.size());
+        // subList的到的是浅拷贝后续的修改（history.add）会影响当前recent，所以要使用新的ArrayList
         List<ChatMessage> recent = new ArrayList<>(history.subList(start,history.size()));
         for (ChatMessage msg: recent) {
             if ("user".equals(msg.getRole())) {

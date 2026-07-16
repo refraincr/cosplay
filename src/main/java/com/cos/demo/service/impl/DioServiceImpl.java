@@ -2,7 +2,7 @@ package com.cos.demo.service.impl;
 
 import com.cos.demo.bo.DioBO;
 import com.cos.demo.history.*;
-import com.cos.demo.scene.builder.ScenePromptBuilder;
+import com.cos.demo.prompt.PromptBuilder;
 import com.cos.demo.service.RoleService;
 import com.openai.client.OpenAIClient;
 import com.openai.core.http.StreamResponse;
@@ -11,11 +11,11 @@ import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import com.cos.demo.constant.PromptConstant;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class DioServiceImpl implements RoleService {
@@ -24,74 +24,35 @@ public class DioServiceImpl implements RoleService {
     private final ChatMemory chatMemory;
     private final MemoryService memoryService;
     private final MemoryStateManager stateManager;
-    private final LongTermMemory  longTermMemory;
-    private final ScenePromptBuilder scenePromptBuilder;
+    private final PromptBuilder promptBuilder;
 
     public DioServiceImpl(OpenAIClient client,
                           ChatMemory chatMemory,
                           MemoryService memoryService,
                           MemoryStateManager stateManager,
-                          LongTermMemory  longTermMemory,
-                          ScenePromptBuilder scenePromptBuilder) {
+                          PromptBuilder promptBuilder) {
         this.client = client;
         this.chatMemory = chatMemory;
         this.memoryService = memoryService;
         this.stateManager = stateManager;
-        this.longTermMemory = longTermMemory;
-        this.scenePromptBuilder = scenePromptBuilder;
+        this.promptBuilder = promptBuilder;
     }
 
     @Override
     public void talk(DioBO dioBO, SseEmitter emitter) {
-
         ChatCompletionCreateParams.Builder builder =
                 ChatCompletionCreateParams.builder().model("qwen3.7-max");
 
-        // 加入系统消息
-        builder.addSystemMessage(PromptConstant.DIO);
+        List<ChatMessage> history = chatMemory.getHistory(dioBO.getSessionId());
+        // 添加系统消息,最近消息,可能的摘要,当前消息
+        promptBuilder.build(builder,dioBO,history);
 
-        // 加入场景
-        String scenePrompt = scenePromptBuilder.build(dioBO.getSessionId());
-        if (!scenePrompt.isBlank()) {
-            builder.addSystemMessage(scenePrompt);
-        }
-
-        // 添加过去的聊天摘要
-        String memory = longTermMemory.buildMemoryPrompt(dioBO.getSessionId());
-        if (!memory.isBlank()) {
-            builder.addSystemMessage(memory);
-        }
-
-        // 加入历史的消息（获取最近的20条消息）
-        List<ChatMessage> history =
-                chatMemory.getHistory(dioBO.getSessionId());
-        int start = Math.max(0,history.size()-20);
-        // subList的到的是浅拷贝后续的修改（history.add）会影响当前recent，所以要使用新的ArrayList
-        List<ChatMessage> recent = new ArrayList<>(history.subList(start,history.size()));
-        for (ChatMessage msg: recent) {
-            if ("user".equals(msg.getRole())) {
-                builder.addUserMessage(msg.getContent());
-            } else {
-                builder.addAssistantMessage(msg.getContent());
-            }
-        }
-
-        // 加入当前消息
-        builder.addUserMessage(dioBO.getMsg());
-
-        // 保存用户信息
-        history.add(
-                new ChatMessage(
-                        "user",
-                        dioBO.getMsg()
-                )
-        );
-
-        // 拼接Assistant信息
-        StringBuilder answer = new StringBuilder();
         ChatCompletionCreateParams params = builder.build();
         try (StreamResponse<ChatCompletionChunk> stream =
                      client.chat().completions().createStreaming(params)) {
+
+            // 拼接Assistant信息
+            StringBuilder answer = new StringBuilder();
             stream.stream().forEach(chunk -> {
                 if (!chunk.choices().isEmpty()) {
                     String content = chunk.choices()
@@ -109,36 +70,46 @@ public class DioServiceImpl implements RoleService {
                     }
                 }
             });
+
+            String finalAnswer = answer.toString();
+
+            //保存user,Assistant信息
+            history.add(new ChatMessage("user", dioBO.getMsg()));
+            history.add(new ChatMessage("assistant", finalAnswer));
+
+            // 若要做摘要
+            if (memoryService.shouldSummary(dioBO.getSessionId(),history)) {
+                // 防止重复摘要，只摘要最新的
+                MemoryState state = stateManager.getState(dioBO.getSessionId());
+                List<ChatMessage> newHistory =
+                        history.subList(
+                                state.getSummarizedIndex(),
+                                history.size()
+                        );
+                // 异步获取摘要
+                memoryService.summaryAsync(
+                        dioBO.getSessionId(),
+                        new ArrayList<>(newHistory),
+                        history.size()
+                );
+
+                // 更新state
+                state.setSummarizedIndex(history.size());
+            }
+
+            // 判断并提取工具符号
+            if (finalAnswer.contains("<tool>") && finalAnswer.contains("</tool>")) {
+                Pattern pattern = Pattern.compile("<tool>(.*?)</tool>",Pattern.DOTALL);
+                Matcher matcher = pattern.matcher(finalAnswer);
+
+                while (matcher.find()) {
+                    String toolCallContent = matcher.group(1);
+                    System.out.println(toolCallContent+"<=======");
+                }
+            }
             emitter.complete();
         } catch (Exception e) {
             emitter.completeWithError(e);
-        }
-        //保存Assistant信息
-        history.add(
-                new ChatMessage(
-                        "assistant",
-                        answer.toString()
-                )
-        );
-
-        // 若要做摘要
-        if (memoryService.shouldSummary(dioBO.getSessionId(),history)) {
-            // 防止重复摘要，只摘要最新的
-            MemoryState state = stateManager.getState(dioBO.getSessionId());
-            List<ChatMessage> newHistory =
-                    history.subList(
-                            state.getSummarizedIndex(),
-                            history.size()
-                    );
-            // 异步获取摘要
-            memoryService.summaryAsync(
-                    dioBO.getSessionId(),
-                    new ArrayList<>(newHistory),
-                    history.size()
-            );
-
-            // 更新state
-            state.setSummarizedIndex(history.size());
         }
     }
 }

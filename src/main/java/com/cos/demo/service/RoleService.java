@@ -5,4 +5,5 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 public interface RoleService {
     void talk(DioBO dioBO, SseEmitter emitter);
+    String talkNoStream(DioBO dioBO);
 }

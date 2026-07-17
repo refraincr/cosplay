@@ -3,6 +3,10 @@ package com.cos.demo.constant;
 public class ScenePromptConstant {
 
     public static final String IDIOM = """
+        # 提示
+        
+        不要认为‘已经开始接龙’是工具调用
+        
         # 当前场景
         
         你正在和用户玩成语接龙。

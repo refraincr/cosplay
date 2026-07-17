@@ -30,4 +30,13 @@ public class CosController {
 
         return emitter;
     }
+
+    @GetMapping("diog")
+    public String diog(@Valid @RequestParam String msg,String sessionId) {
+        DioBO dioBO = new DioBO();
+        dioBO.setMsg(msg);
+        dioBO.setSessionId(sessionId);
+
+        return dioService.talkNoStream( dioBO);
+    }
 }
